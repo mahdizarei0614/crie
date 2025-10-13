@@ -30,7 +30,7 @@ export function emitReactIntrinsicDts(
     out += indent(3) + `interface IntrinsicElements {\n`;
 
     for (const comp of analysis.components) {
-        out += emitComponentEntry(comp, opts);
+        out += emitComponentEntry(comp);
     }
 
     out += indent(3) + `}\n`;
@@ -43,33 +43,28 @@ export function emitReactIntrinsicDts(
     return outPath;
 }
 
-function emitComponentEntry(c: ComponentDesc, opts: { addReactHtmlAttributes: boolean }): string {
-    let s = "";
-    s += indent(4) + `'${c.tag}': `;
-    const parts: string[] = [];
+function emitComponentEntry(c: ComponentDesc): string {
+    const lines: string[] = [];
 
-    if (opts.addReactHtmlAttributes) {
-        parts.push(`React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement>`);
-    } else {
-        parts.push(`{}`);
+    for (const input of c.inputs) {
+        const name = quoteIfNeeded(input.name);
+        const optional = input.optional ? "?" : "";
+        lines.push(`${indent(5)}${name}${optional}: ${printTypeRef(input.type)};`);
     }
 
-    const inputLines = c.inputs.map(p => `${quoteIfNeeded(p.name)}?: ${printTypeRef(p.type)};`);
-    if (inputLines.length) parts.push(`{\n${indent(6)}${inputLines.join(`\n${indent(6)}`)}\n${indent(5)}}`);
+    for (const output of c.outputs) {
+        const handler = `on${capitalize(output.name)}`;
+        lines.push(`${indent(5)}${quoteIfNeeded(handler)}?: (e: CustomEvent<${printTypeRef(output.payload)}>) => void;`);
+    }
 
-    const eventLines = c.outputs.map(o => {
-        const handler = `on${capitalize(o.name)}`;
-        return `${quoteIfNeeded(handler)}?: (e: CustomEvent<${printTypeRef(o.payload)}>) => void;`;
-    });
-    if (eventLines.length) parts.push(`{\n${indent(6)}${eventLines.join(`\n${indent(6)}`)}\n${indent(5)}}`);
+    lines.push(`${indent(5)}children?: unknown;`);
 
-    parts.push(`{ children?: React.ReactNode }`);
-    s += parts.join(" & ") + ";\n";
-    return s;
+    return `${indent(4)}'${c.tag}': {\n${lines.join("\n")}\n${indent(4)}};\n`;
 }
 
 function printTypeRef(t: TypeRef): string {
-    return t.kind === "inline" ? t.text : `AloTypes$${t.fileId}.${t.exportName}`;
+    if (t.kind === "inline") return t.text;
+    return "any";
 }
 
 function quoteIfNeeded(name: string): string {

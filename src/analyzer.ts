@@ -1,7 +1,7 @@
 import { Project, SyntaxKind, ts, Node, ClassDeclaration, PropertyDeclaration, Decorator } from "ts-morph";
 import { globSync } from "glob";
 import path from "node:path";
-import { normPath, shortHash, isKebabCustomElement } from "./utils.js";
+import { isKebabCustomElement } from "./utils.js";
 
 export type TypeRef =
     | { kind: "inline"; text: string }
@@ -204,7 +204,8 @@ function resolveEffectiveTypeRef(
 ): TypeRef {
     // Quick wins: primitives and simple unions don’t need namespacing.
     if (isPrimitiveish(typeText)) {
-        return { kind: "inline", text: widenIfNeeded(typeText, cfg) };
+        const cleaned = formatTypeText(typeText);
+        return { kind: "inline", text: widenIfNeeded(cleaned, cfg) };
     }
 
     // Ask checker for the “apparent” type
@@ -212,8 +213,9 @@ function resolveEffectiveTypeRef(
     if (t) {
         // If TS prints literal/union nicely, just inline that.
         const printed = t.getText();
-        if (printed && isReasonableInline(printed)) {
-            return { kind: "inline", text: widenUnionIfNeeded(printed, cfg) };
+        const cleaned = printed ? formatTypeText(printed) : "";
+        if (cleaned && isReasonableInline(cleaned)) {
+            return { kind: "inline", text: widenUnionIfNeeded(cleaned, cfg) };
         }
     }
 
@@ -222,28 +224,25 @@ function resolveEffectiveTypeRef(
     if (symbol) {
         const decl = symbol.getDeclarations()?.[0];
         if (decl) {
-            const sf = decl.getSourceFile();
-            const fileId = shortHash(normPath(sf.getFilePath()));
-            const exportName = symbol.getName().replace(/["']/g, "");
-            // Ensure namespace bucket
-            if (!namespaces.has(fileId)) namespaces.set(fileId, new Map());
-            const bucket = namespaces.get(fileId)!;
-
-            if (!bucket.has(exportName)) {
-                // Capture a reconstructable text (exported)
-                let text = decl.getText();
-                // Ensure "export" exists on captured declaration
-                if (!/^export\s/.test(text)) {
-                    text = "export " + text;
-                }
-                bucket.set(exportName, text);
+            const declared = checker.getDeclaredTypeOfSymbol(symbol);
+            const formatted = formatTypeText(
+                checker.typeToString(
+                    declared,
+                    contextNode,
+                    ts.TypeFormatFlags.NoTruncation |
+                        ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope |
+                        ts.TypeFormatFlags.WriteTypeArgumentsOfSignature
+                )
+            );
+            if (formatted && isReasonableInline(formatted)) {
+                return { kind: "inline", text: widenUnionIfNeeded(formatted, cfg) };
             }
-            return { kind: "ref", fileId, exportName, declText: "" };
         }
     }
 
     // Last resort: inline raw text
-    return { kind: "inline", text: widenIfNeeded(typeText || "unknown", cfg) };
+    const fallback = typeText || "unknown";
+    return { kind: "inline", text: widenIfNeeded(formatTypeText(fallback), cfg) };
 }
 
 function isPrimitiveish(s: string): boolean {
@@ -266,4 +265,58 @@ function widenUnionIfNeeded(s: string, cfg: Cfg): string {
     if (!cfg.widenPrimitivesToString) return s;
     // widen inside unions like boolean | 'yes'
     return s.replace(/\bboolean\b/g, "boolean | string").replace(/\bnumber\b/g, "number | string");
+}
+
+function formatTypeText(text: string): string {
+    let result = text.trim();
+
+    // Remove import("..."). prefixes that TS may emit
+    result = result.replace(/import\(".*?"\)\./g, "");
+
+    // Remove typeof NodeModule references which leak from Angular metadata
+    result = result.replace(/typeof\s+NodeModule/g, "unknown");
+    result = result.replace(/\bNodeModule\b/g, "unknown");
+
+    const wrappers = [
+        "Signal",
+        "WritableSignal",
+        "InputSignal",
+        "OutputSignal",
+        "OutputEmitter",
+        "ModelSignal",
+        "EventEmitter"
+    ];
+
+    for (const wrapper of wrappers) {
+        result = unwrapGenericWrapper(result, wrapper);
+    }
+
+    return result;
+}
+
+function unwrapGenericWrapper(text: string, wrapper: string): string {
+    let idx = text.indexOf(`${wrapper}<`);
+    let output = text;
+
+    while (idx !== -1) {
+        const start = idx + wrapper.length + 1; // after "Wrapper<"
+        let depth = 1;
+        let i = start;
+        for (; i < output.length; i++) {
+            const ch = output[i];
+            if (ch === "<") depth++;
+            else if (ch === ">") {
+                depth--;
+                if (depth === 0) break;
+            }
+        }
+
+        if (depth !== 0) break;
+
+        const inner = output.slice(start, i).trim();
+        output = output.slice(0, idx) + inner + output.slice(i + 1);
+        idx = output.indexOf(`${wrapper}<`);
+    }
+
+    return output;
 }
