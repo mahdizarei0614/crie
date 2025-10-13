@@ -10,14 +10,13 @@ export function normPath(p: string): string {
 }
 
 export function isKebabCustomElement(tag: string): boolean {
-    // must contain dash and start with a letter
     return /^[a-z][a-z0-9.-]*-[a-z0-9.-]+$/.test(tag);
 }
 
-export function capitalize(s: string) {
+export function capitalize(s: string): string {
     return s ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
-export function ensureDirSync(fs: typeof import("node:fs"), dir: string) {
+export function ensureDirSync(fs: typeof import("node:fs"), dir: string): void {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }

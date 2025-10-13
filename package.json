@@ -1,17 +1,49 @@
 {
   "name": "crie",
   "version": "0.1.0",
-  "description": "Generate React intrinsic element typings from an Angular Elements library",
+  "description": "Generate React JSX intrinsic element typings from Angular Elements libraries — supports both legacy @Input/@Output and new signal APIs.",
   "type": "module",
   "bin": { "crie": "./dist/cli.mjs" },
+  "main": "./dist/cli.mjs",
+  "types": "./dist/cli.d.ts",
+  "files": ["dist", "README.md", "LICENSE"],
+  "keywords": [
+    "angular",
+    "react",
+    "typescript",
+    "intrinsic-elements",
+    "angular-elements",
+    "signals",
+    "inputs",
+    "outputs",
+    "codegen",
+    "cli",
+    "skyBlueDev"
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Mahdi Zarei (skyBlueDev)",
+    "email": "mahdizarei0614@gmail.com",
+    "url": "https://github.com/mahdizarei0614"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mahdizarei0614/crie.git"
+  },
+  "bugs": { "url": "https://github.com/mahdizarei0614/crie/issues" },
+  "homepage": "https://github.com/mahdizarei0614/crie#readme",
+  "engines": { "node": ">=18.18" },
   "scripts": {
-    "build": "tsup src/cli.ts --format esm --dts",
-    "dev": "tsup src/cli.ts --format esm --dts --watch",
-    "react-types": "node dist/cli.mjs react-types"
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "prepare": "tsup",
+    "release": "npm version patch && npm publish --access public"
   },
   "dependencies": {
-    "commander": "^12.1.0",
     "colorette": "^2.0.20",
+    "commander": "^12.1.0",
     "cosmiconfig": "^9.0.0",
     "glob": "^11.0.0",
     "ts-morph": "^22.0.0",
@@ -19,9 +51,10 @@
   },
   "devDependencies": {
     "@types/node": "^22.7.5",
+    "eslint": "^9.11.0",
     "tsup": "^8.3.0",
-    "typescript": "^5.5.4"
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
   },
-  "engines": { "node": ">=18.18" },
-  "license": "MIT"
+  "publishConfig": { "access": "public" }
 }
