@@ -202,16 +202,18 @@ function resolveEffectiveTypeRef(
     namespaces: Map<string, Map<string, string>>,
     cfg: Cfg
 ): TypeRef {
+    const normalizedTypeText = normalizeAngularTypeText(typeText);
+
     // Quick wins: primitives and simple unions don’t need namespacing.
-    if (isPrimitiveish(typeText)) {
-        return { kind: "inline", text: widenIfNeeded(typeText, cfg) };
+    if (isPrimitiveish(normalizedTypeText)) {
+        return { kind: "inline", text: widenIfNeeded(normalizedTypeText, cfg) };
     }
 
     // Ask checker for the “apparent” type
     const t = (contextNode as any).getType?.();
     if (t) {
         // If TS prints literal/union nicely, just inline that.
-        const printed = t.getText();
+        const printed = normalizeAngularTypeText(t.getText());
         if (printed && isReasonableInline(printed)) {
             return { kind: "inline", text: widenUnionIfNeeded(printed, cfg) };
         }
@@ -243,7 +245,10 @@ function resolveEffectiveTypeRef(
     }
 
     // Last resort: inline raw text
-    return { kind: "inline", text: widenIfNeeded(typeText || "unknown", cfg) };
+    return {
+        kind: "inline",
+        text: widenIfNeeded(normalizedTypeText || "unknown", cfg)
+    };
 }
 
 function isPrimitiveish(s: string): boolean {
@@ -266,4 +271,93 @@ function widenUnionIfNeeded(s: string, cfg: Cfg): string {
     if (!cfg.widenPrimitivesToString) return s;
     // widen inside unions like boolean | 'yes'
     return s.replace(/\bboolean\b/g, "boolean | string").replace(/\bnumber\b/g, "number | string");
+}
+
+function normalizeAngularTypeText(raw: string | undefined): string {
+    if (!raw) return raw ?? "";
+
+    let text = raw;
+
+    // Drop absolute import paths that TS emits for Angular types
+    text = text.replace(/import\(("|')[^"']*@angular\/core[^"']*("|')\)\./g, "");
+
+    const WRAPPERS = [
+        "InputSignal",
+        "InputSignalWithTransform",
+        "ModelSignal",
+        "Signal",
+        "WritableSignal",
+        "ReadonlySignal"
+    ];
+
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const wrapper of WRAPPERS) {
+            const res = unwrapAngularWrapper(text, wrapper);
+            if (res.changed) {
+                text = res.text;
+                changed = true;
+            }
+        }
+    }
+
+    return text.trim();
+}
+
+function unwrapAngularWrapper(text: string, wrapper: string): { text: string; changed: boolean } {
+    const pattern = new RegExp(`(?:import\\(("|')[^"']*@angular\\/core[^"']*("|')\\)\\.)?${wrapper}\\s*<`, "g");
+    let match: RegExpExecArray | null;
+    let lastIndex = 0;
+    let result = "";
+    let changed = false;
+
+    while ((match = pattern.exec(text))) {
+        const start = match.index;
+        const contentStart = pattern.lastIndex;
+        const extracted = extractGenericContent(text, contentStart);
+        if (!extracted) {
+            pattern.lastIndex = contentStart;
+            continue;
+        }
+
+        result += text.slice(lastIndex, start) + extracted.content.trim();
+        lastIndex = extracted.endIndex;
+        pattern.lastIndex = extracted.endIndex;
+        changed = true;
+    }
+
+    if (!changed) {
+        return { text, changed: false };
+    }
+
+    result += text.slice(lastIndex);
+    return { text: result, changed: true };
+}
+
+function extractGenericContent(text: string, start: number): { content: string; endIndex: number } | undefined {
+    let depth = 1;
+    let i = start;
+    while (i < text.length) {
+        const ch = text[i];
+        if (ch === "<") {
+            depth++;
+        } else if (ch === ">") {
+            depth--;
+            if (depth === 0) {
+                const content = text.slice(start, i);
+                return { content, endIndex: i + 1 };
+            }
+        } else if (ch === "'" || ch === '"' || ch === "`") {
+            // Skip over string literal contents to avoid premature closing
+            const quote = ch;
+            i++;
+            while (i < text.length && text[i] !== quote) {
+                if (text[i] === "\\") i++;
+                i++;
+            }
+        }
+        i++;
+    }
+    return undefined;
 }
