@@ -1,4 +1,5 @@
 import { Project, SyntaxKind, ts, Node, ClassDeclaration, PropertyDeclaration, Decorator } from "ts-morph";
+import type { Type } from "ts-morph";
 import { globSync } from "glob";
 import path from "node:path";
 import { normPath, shortHash, isKebabCustomElement } from "./utils.js";
@@ -215,6 +216,11 @@ function resolveEffectiveTypeRef(
         if (printed && isReasonableInline(printed)) {
             return { kind: "inline", text: widenUnionIfNeeded(printed, cfg) };
         }
+
+        const expanded = expandTypeInline(t, contextNode, checker, cfg);
+        if (expanded) {
+            return { kind: "inline", text: expanded };
+        }
     }
 
     // Try to locate a declaration symbol to copy into a namespace
@@ -222,6 +228,10 @@ function resolveEffectiveTypeRef(
     if (symbol) {
         const decl = symbol.getDeclarations()?.[0];
         if (decl) {
+            const inlineDecl = expandTypeInline(checker.getTypeAtLocation(decl), decl, checker, cfg);
+            if (inlineDecl) {
+                return { kind: "inline", text: inlineDecl };
+            }
             const sf = decl.getSourceFile();
             const fileId = shortHash(normPath(sf.getFilePath()));
             const exportName = symbol.getName().replace(/["']/g, "");
@@ -253,6 +263,158 @@ function isPrimitiveish(s: string): boolean {
 function isReasonableInline(s: string): boolean {
     // Avoid inlining absurdly large mapped/conditional types
     return s.length <= 300 && (s.includes("|") || s.includes("{") || isPrimitiveish(s));
+}
+
+function expandTypeInline(
+    type: Type | undefined,
+    contextNode: Node,
+    checker: ReturnType<Project["getTypeChecker"]>,
+    cfg: Cfg,
+    depth = 0,
+    seen: Set<string> = new Set()
+): string | undefined {
+    if (!type || depth > 6) return;
+
+    if (type.isStringLiteral()) {
+        const value = type.getLiteralValue();
+        return `'${String(value).replace(/'/g, "\\'")}'`;
+    }
+    if (type.isNumberLiteral()) {
+        return String(type.getLiteralValue());
+    }
+    if (type.isBooleanLiteral()) {
+        const intrinsic = (type as any).compilerType.intrinsicName;
+        if (intrinsic === "true" || intrinsic === "false") return intrinsic;
+    }
+
+    if (type.isUnion()) {
+        const parts = type.getUnionTypes().map(part =>
+            expandTypeInline(part, contextNode, checker, cfg, depth + 1, seen) ?? widenUnionIfNeeded(part.getText(contextNode), cfg)
+        );
+        return widenUnionIfNeeded(parts.join(" | "), cfg);
+    }
+
+    if (type.isTuple()) {
+        const elements = type.getTupleElements();
+        const rendered = elements.map(el => expandTypeInline(el, contextNode, checker, cfg, depth + 1, seen) ?? widenUnionIfNeeded(el.getText(contextNode), cfg));
+        return `[${rendered.join(", ")}]`;
+    }
+
+    if (type.isIntersection()) {
+        const parts = type.getIntersectionTypes();
+        if (parts.length) {
+            const rendered = parts.map(part =>
+                expandTypeInline(part, contextNode, checker, cfg, depth + 1, seen) ?? widenUnionIfNeeded(part.getText(contextNode), cfg)
+            );
+            return rendered.join(" & ");
+        }
+    }
+
+    if (type.isArray()) {
+        const element = type.getArrayType();
+        if (element) {
+            const rendered = expandTypeInline(element, contextNode, checker, cfg, depth + 1, seen) ?? widenUnionIfNeeded(element.getText(contextNode), cfg);
+            return `${rendered}[]`;
+        }
+    }
+
+    const text = type.getText(contextNode);
+    if (isReasonableInline(text)) {
+        return widenUnionIfNeeded(text, cfg);
+    }
+
+    const alias = type.getAliasSymbol?.();
+    if (alias) {
+        const decl = alias.getDeclarations()?.[0];
+        if (decl) {
+            const key = `${normPath(decl.getSourceFile().getFilePath())}:${alias.getName()}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                const aliasInline = expandTypeInline(checker.getTypeAtLocation(decl), decl, checker, cfg, depth + 1, seen);
+                if (aliasInline) return aliasInline;
+            }
+        }
+    }
+
+    const literal = objectTypeToLiteral(type, contextNode, checker, cfg, depth + 1, seen);
+    if (literal) return literal;
+
+    return undefined;
+}
+
+function objectTypeToLiteral(
+    type: Type,
+    contextNode: Node,
+    checker: ReturnType<Project["getTypeChecker"]>,
+    cfg: Cfg,
+    depth: number,
+    seen: Set<string>
+): string | undefined {
+    const props = type.getProperties();
+    const stringIndex = type.getStringIndexType();
+    const numberIndex = type.getNumberIndexType();
+
+    if (!props.length && !stringIndex && !numberIndex) return undefined;
+
+    const lines: string[] = [];
+
+    for (const prop of props) {
+        const name = prop.getName();
+        if (name.startsWith("__@")) continue;
+        const declarations = prop.getDeclarations();
+        const decl = declarations?.[0] ?? contextNode;
+        const propType = checker.getTypeOfSymbolAtLocation(prop, decl);
+        if (!propType) {
+            lines.push(`${formatPropertyName(name)}: any;`);
+            continue;
+        }
+        let rendered = expandTypeInline(propType, decl, checker, cfg, depth + 1, seen) ?? widenUnionIfNeeded(propType.getText(decl), cfg);
+        const optional = isOptionalSymbol(prop);
+        if (optional && !/[<\(\[]/.test(rendered)) {
+            rendered = removeUndefinedFromUnion(rendered);
+        }
+        lines.push(`${formatPropertyName(name)}${optional ? "?" : ""}: ${rendered};`);
+    }
+
+    if (stringIndex) {
+        const rendered = expandTypeInline(stringIndex, contextNode, checker, cfg, depth + 1, seen) ?? widenUnionIfNeeded(stringIndex.getText(contextNode), cfg);
+        lines.push(`[key: string]: ${rendered};`);
+    }
+
+    if (numberIndex) {
+        const rendered = expandTypeInline(numberIndex, contextNode, checker, cfg, depth + 1, seen) ?? widenUnionIfNeeded(numberIndex.getText(contextNode), cfg);
+        lines.push(`[key: number]: ${rendered};`);
+    }
+
+    if (!lines.length) return "{}";
+
+    return formatTypeLiteral(lines);
+}
+
+function isOptionalSymbol(symbol: import("ts-morph").Symbol): boolean {
+    if (symbol.hasFlags(ts.SymbolFlags.Optional)) return true;
+    const decls = symbol.getDeclarations() ?? [];
+    return decls.some(d =>
+        Node.isPropertySignature(d) || Node.isPropertyDeclaration(d) || Node.isParameter(d)
+            ? !!(d as any).hasQuestionToken?.()
+            : false
+    );
+}
+
+function removeUndefinedFromUnion(text: string): string {
+    const parts = text.split("|").map(p => p.trim()).filter(Boolean);
+    const filtered = parts.filter(p => p !== "undefined");
+    return filtered.length ? filtered.join(" | ") : text;
+}
+
+function formatTypeLiteral(lines: string[]): string {
+    if (!lines.length) return "{}";
+    return `{ ${lines.join(" ")} }`;
+}
+
+function formatPropertyName(name: string): string {
+    if (/^[a-zA-Z_$][0-9a-zA-Z_$]*$/.test(name)) return name;
+    return `'${name.replace(/'/g, "\\'")}'`;
 }
 
 function widenIfNeeded(s: string, cfg: Cfg): string {
