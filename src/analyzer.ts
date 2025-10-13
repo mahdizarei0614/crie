@@ -93,8 +93,11 @@ export function analyzeAngularLibrary(cfg: Cfg): AnalysisResult {
                 if (Node.isPropertyDeclaration(m)) {
                     const init = m.getInitializer();
                     if (init && Node.isCallExpression(init)) {
-                        const callName = init.getExpression().getText();
-                        if (callName === "input" || callName === "model") {
+                        const callExpr = init.getExpression();
+                        const baseCallName = Node.isPropertyAccessExpression(callExpr)
+                            ? callExpr.getExpression().getText()
+                            : callExpr.getText();
+                        if (baseCallName === "input" || baseCallName === "model") {
                             // type arg if present; else infer from transform
                             const generic = init.getTypeArguments()[0]?.getText();
                             const inferred = generic ?? inferTypeFromTransform(init) ?? "unknown";
@@ -103,14 +106,14 @@ export function analyzeAngularLibrary(cfg: Cfg): AnalysisResult {
                             const propName = m.getName();
                             const optional = !!m.hasQuestionToken();
 
-                            inputs.push({ name: propName, type: tRef, optional, source: callName === "model" ? "model" : "signal" });
+                            inputs.push({ name: propName, type: tRef, optional, source: baseCallName === "model" ? "model" : "signal" });
 
-                            if (callName === "model") {
+                            if (baseCallName === "model") {
                                 const evtName = `${propName}Change`;
                                 outputs.push({ name: evtName, payload: tRef, source: "model" });
                             }
                         }
-                        if (callName === "output") {
+                        if (baseCallName === "output") {
                             const generic = init.getTypeArguments()[0]?.getText() ?? "any";
                             const tRef = resolveEffectiveTypeRef(generic, m, checker, namespaces, cfg);
                             outputs.push({ name: m.getName(), payload: tRef, source: "signal" });
@@ -278,8 +281,8 @@ function normalizeAngularTypeText(raw: string | undefined): string {
 
     let text = raw;
 
-    // Drop absolute import paths that TS emits for Angular types
-    text = text.replace(/import\(("|')[^"']*@angular\/core[^"']*("|')\)\./g, "");
+    // Drop inline import() module paths that TS emits for types
+    text = text.replace(/import\(("|')[^"']*("|')\)\./g, "");
 
     const WRAPPERS = [
         "InputSignal",
