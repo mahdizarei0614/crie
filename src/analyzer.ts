@@ -202,24 +202,26 @@ function resolveEffectiveTypeRef(
     namespaces: Map<string, Map<string, string>>,
     cfg: Cfg
 ): TypeRef {
-    // Quick wins: primitives and simple unions don’t need namespacing.
-    if (isPrimitiveish(typeText)) {
-        return { kind: "inline", text: widenIfNeeded(typeText, cfg) };
+    const inlineFromText = tryInlineFromRawText(typeText, cfg);
+    if (inlineFromText) {
+        return { kind: "inline", text: inlineFromText };
     }
 
-    // Ask checker for the “apparent” type
     const t = (contextNode as any).getType?.();
     if (t) {
-        // If TS prints literal/union nicely, just inline that.
-        const printed = t.getText();
-        if (printed && isReasonableInline(printed)) {
-            return { kind: "inline", text: widenUnionIfNeeded(printed, cfg) };
+        const inlineFromType = tryInlineFromType(t, cfg);
+        if (inlineFromType) {
+            return { kind: "inline", text: inlineFromType };
         }
     }
 
-    // Try to locate a declaration symbol to copy into a namespace
     const symbol = (contextNode as any).getSymbol?.() ?? t?.getSymbol?.();
     if (symbol) {
+        const inlineFromSymbol = tryInlineFromSymbol(symbol, cfg);
+        if (inlineFromSymbol) {
+            return { kind: "inline", text: inlineFromSymbol };
+        }
+
         const decl = symbol.getDeclarations()?.[0];
         if (decl) {
             const sf = decl.getSourceFile();
@@ -244,6 +246,99 @@ function resolveEffectiveTypeRef(
 
     // Last resort: inline raw text
     return { kind: "inline", text: widenIfNeeded(typeText || "unknown", cfg) };
+}
+
+const INLINE_TYPE_FLAGS =
+    ts.TypeFormatFlags.NoTruncation |
+    ts.TypeFormatFlags.InTypeAlias |
+    ts.TypeFormatFlags.MultilineObjectLiterals |
+    ts.TypeFormatFlags.UseSingleQuotesForStringLiteralType;
+
+function tryInlineFromType(t: import("ts-morph").Type, cfg: Cfg): string | undefined {
+    const direct = sanitizeInlineText(t.getText(undefined, INLINE_TYPE_FLAGS), cfg);
+    if (direct) return direct;
+
+    const alias = t.getAliasSymbol();
+    if (alias) {
+        const aliasInline = tryInlineFromSymbol(alias, cfg);
+        if (aliasInline) return aliasInline;
+    }
+
+    const typeSymbol = t.getSymbol();
+    if (typeSymbol) {
+        const symbolInline = tryInlineFromSymbol(typeSymbol, cfg);
+        if (symbolInline) return symbolInline;
+    }
+
+    const apparent = t.getApparentType();
+    if (apparent && apparent !== t) {
+        return tryInlineFromType(apparent, cfg);
+    }
+
+    return;
+}
+
+function tryInlineFromSymbol(symbol: import("ts-morph").Symbol, cfg: Cfg): string | undefined {
+    for (const decl of symbol.getDeclarations() ?? []) {
+        const inline = extractDeclarationInline(decl, cfg);
+        if (inline) return inline;
+    }
+    return;
+}
+
+function tryInlineFromRawText(text: string | undefined, cfg: Cfg): string | undefined {
+    if (!text) return;
+    if (isPrimitiveish(text)) {
+        return widenIfNeeded(text, cfg);
+    }
+    return sanitizeInlineText(text, cfg);
+}
+
+function sanitizeInlineText(text: string | undefined, cfg: Cfg): string | undefined {
+    if (!text) return;
+    let trimmed = text.trim();
+    if (!trimmed || trimmed === "never") return;
+
+    trimmed = trimmed.replace(/import\([^)]*\)\./g, "");
+
+    const signalMatch = trimmed.match(/\b(?:InputSignal|WritableSignal|Signal|ModelSignal)\s*<([^>]+)>/);
+    if (signalMatch) {
+        return sanitizeInlineText(signalMatch[1], cfg);
+    }
+
+    if (!isReasonableInline(trimmed)) return;
+
+    return widenUnionIfNeeded(trimmed.replace(/"/g, "'"), cfg);
+}
+
+function extractDeclarationInline(decl: Node, cfg: Cfg): string | undefined {
+    if (Node.isTypeAliasDeclaration(decl)) {
+        return sanitizeInlineText(decl.getTypeNode()?.getText(), cfg);
+    }
+
+    if (Node.isInterfaceDeclaration(decl) || Node.isClassDeclaration(decl) || Node.isTypeLiteralNode(decl)) {
+        const type = (decl as any).getType?.();
+        if (type) {
+            const text = type.getText(undefined, INLINE_TYPE_FLAGS);
+            const sanitized = sanitizeInlineText(text, cfg);
+            if (sanitized) return sanitized;
+        }
+    }
+
+    if (Node.isEnumDeclaration(decl)) {
+        const members = decl.getMembers();
+        const values = members.map(m => {
+            const init = m.getInitializer();
+            if (init) return init.getText();
+            const name = m.getNameNode()?.getText();
+            return name ? `'${name}'` : undefined;
+        }).filter((v): v is string => !!v);
+        if (values.length) {
+            return sanitizeInlineText(values.join(" | "), cfg);
+        }
+    }
+
+    return;
 }
 
 function isPrimitiveish(s: string): boolean {
