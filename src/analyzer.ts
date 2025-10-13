@@ -207,13 +207,40 @@ function resolveEffectiveTypeRef(
         return { kind: "inline", text: widenIfNeeded(typeText, cfg) };
     }
 
+    const direct = inlineableText(typeText, cfg);
+    if (direct) {
+        return { kind: "inline", text: direct };
+    }
+
     // Ask checker for the “apparent” type
     const t = (contextNode as any).getType?.();
     if (t) {
         // If TS prints literal/union nicely, just inline that.
-        const printed = t.getText();
-        if (printed && isReasonableInline(printed)) {
-            return { kind: "inline", text: widenUnionIfNeeded(printed, cfg) };
+        const printed = checker.typeToString(
+            (t as any).compilerType ?? t,
+            (contextNode as any).compilerNode ?? contextNode,
+            ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.InTypeAlias
+        );
+        if (printed) {
+            const inline = inlineableText(printed, cfg);
+            if (inline) {
+                return { kind: "inline", text: inline };
+            }
+        }
+
+        const apparent = t.getApparentType?.();
+        if (apparent) {
+            const apparentText = checker.typeToString(
+                (apparent as any).compilerType ?? apparent,
+                (contextNode as any).compilerNode ?? contextNode,
+                ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.InTypeAlias
+            );
+            if (apparentText) {
+                const inline = inlineableText(apparentText, cfg);
+                if (inline) {
+                    return { kind: "inline", text: inline };
+                }
+            }
         }
     }
 
@@ -222,6 +249,15 @@ function resolveEffectiveTypeRef(
     if (symbol) {
         const decl = symbol.getDeclarations()?.[0];
         if (decl) {
+            if (Node.isTypeAliasDeclaration(decl)) {
+                const aliasTypeNode = decl.getTypeNode();
+                if (aliasTypeNode) {
+                    const aliasText = inlineableText(aliasTypeNode.getText(), cfg);
+                    if (aliasText) {
+                        return { kind: "inline", text: aliasText };
+                    }
+                }
+            }
             const sf = decl.getSourceFile();
             const fileId = shortHash(normPath(sf.getFilePath()));
             const exportName = symbol.getName().replace(/["']/g, "");
@@ -253,6 +289,15 @@ function isPrimitiveish(s: string): boolean {
 function isReasonableInline(s: string): boolean {
     // Avoid inlining absurdly large mapped/conditional types
     return s.length <= 300 && (s.includes("|") || s.includes("{") || isPrimitiveish(s));
+}
+
+function inlineableText(typeText: string, cfg: Cfg): string | undefined {
+    const trimmed = typeText.trim();
+    if (!trimmed || !isReasonableInline(trimmed)) return;
+    if (trimmed.includes("|")) {
+        return widenUnionIfNeeded(trimmed, cfg);
+    }
+    return widenIfNeeded(trimmed, cfg);
 }
 
 function widenIfNeeded(s: string, cfg: Cfg): string {
