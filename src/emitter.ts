@@ -43,28 +43,28 @@ export function emitReactIntrinsicDts(
     return outPath;
 }
 
-function emitComponentEntry(c: ComponentDesc, opts: { addReactHtmlAttributes: boolean }): string {
+function emitComponentEntry(c: ComponentDesc, _opts: { addReactHtmlAttributes: boolean }): string {
     let s = "";
     s += indent(4) + `'${c.tag}': `;
-    const parts: string[] = [];
+    const lines: string[] = [];
 
-    if (opts.addReactHtmlAttributes) {
-        parts.push(`React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement>, HTMLElement>`);
-    } else {
-        parts.push(`{}`);
+    for (const input of c.inputs) {
+        const optional = input.optional ? "?" : "";
+        lines.push(`${quoteIfNeeded(input.name)}${optional}: ${printTypeRef(input.type)};`);
     }
 
-    const inputLines = c.inputs.map(p => `${quoteIfNeeded(p.name)}?: ${printTypeRef(p.type)};`);
-    if (inputLines.length) parts.push(`{\n${indent(6)}${inputLines.join(`\n${indent(6)}`)}\n${indent(5)}}`);
+    for (const output of c.outputs) {
+        const handler = `on${capitalize(output.name)}`;
+        lines.push(`${quoteIfNeeded(handler)}?: (e: CustomEvent<${printTypeRef(output.payload)}>) => void;`);
+    }
 
-    const eventLines = c.outputs.map(o => {
-        const handler = `on${capitalize(o.name)}`;
-        return `${quoteIfNeeded(handler)}?: (e: CustomEvent<${printTypeRef(o.payload)}>) => void;`;
-    });
-    if (eventLines.length) parts.push(`{\n${indent(6)}${eventLines.join(`\n${indent(6)}`)}\n${indent(5)}}`);
+    lines.push(`children?: unknown;`);
 
-    parts.push(`{ children?: React.ReactNode }`);
-    s += parts.join(" & ") + ";\n";
+    if (lines.length) {
+        s += `{\n${indent(5)}${lines.join(`\n${indent(5)}`)}\n${indent(4)}};\n`;
+    } else {
+        s += `{ };\n`;
+    }
     return s;
 }
 
