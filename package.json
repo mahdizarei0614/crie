@@ -1,10 +1,10 @@
 {
   "name": "crie",
-  "version": "0.1.0",
+  "version": "0.1.3",
   "description": "Generate React JSX intrinsic element typings from Angular Elements libraries — supports both legacy @Input/@Output and new signal APIs.",
   "type": "module",
-  "bin": { "crie": "./dist/cli.mjs" },
-  "main": "./dist/cli.mjs",
+  "bin": { "crie": "./dist/cli.js" },
+  "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",
   "files": ["dist", "README.md", "LICENSE"],
   "keywords": [
@@ -50,7 +50,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/node": "^22.7.5",
+    "@types/node": "^18.19.1",
     "eslint": "^9.11.0",
     "tsup": "^8.3.0",
     "typescript": "^5.5.4",
