@@ -1,8 +1,8 @@
 # crie
 
-Generate strongly typed React JSX intrinsic element definitions from Angular Elements libraries. `crie` scans your Angular component sources, collects the available inputs and outputs (including the new `input()`, `output()`, and `model()` signal helpers), and emits `.d.ts` typings that let TypeScript-aware React tooling understand your custom elements.
+Generate strongly typed React JSX intrinsic element definitions from Angular Elements libraries. `crie` scans your Angular component sources, collects the available inputs and outputs (including the new `input()`, `output()`, and `model()` signal helpers), and emits `.d.ts` typings that let TypeScript-aware React tooling understand your custom elements. That means authoring JSX with the same confidence you have when consuming first-party React components.
 
-> **Why "crie"?** It stands for **C**onvert **R**eact **I**ntrinsic **E**lements. Bring the ergonomics of JSX authoring to Angular Elements projects without manually writing declaration files.
+> **Why "crie"?** It stands for **C**onvert **R**eact **I**ntrinsic **E**lements. Bring the ergonomics of JSX authoring to Angular Elements projects without manually writing declaration files or duplicating prop contracts in two frameworks.
 
 ## Table of contents
 
@@ -14,6 +14,7 @@ Generate strongly typed React JSX intrinsic element definitions from Angular Ele
 - [Configuration](#configuration)
   - [Config file locations](#config-file-locations)
   - [Options](#options)
+  - [Annotated example config](#annotated-example-config)
   - [Example configurations](#example-configurations)
 - [CLI reference](#cli-reference)
 - [Generated output](#generated-output)
@@ -57,7 +58,7 @@ npm install --global crie
 
 1. **Install the package** (see above).
 2. **Create a `crie` config** (optional – defaults cover many setups). See [Configuration](#configuration) for details.
-3. **Build your Angular components** so TypeScript metadata is up to date.
+3. **Build your Angular components** so TypeScript metadata is up to date. If you are using Angular's standalone components or a multi-project workspace, make sure the referenced `tsconfig` matches the compiled output you ship.
 4. **Generate typings**:
 
    ```bash
@@ -66,7 +67,8 @@ npm install --global crie
 
    Use `--config <path>` if your config lives outside the current directory.
 
-5. **Ship the generated file** – usually under `dist/elements/alo-kit/global.d.ts` by default. Commit it or publish it with your package.
+5. **Verify the output** – open the emitted `.d.ts` file and spot-check a few components to ensure their inputs/outputs look correct.
+6. **Ship the generated file** – usually under `dist/elements/alo-kit/global.d.ts` by default. Commit it or publish it with your package.
 
 ## How it works
 
@@ -101,6 +103,8 @@ Configuration is fully optional. Without any file `crie` assumes:
 - `react.emitWrappers`: `false` (reserved for future use)
 - `react.wrapperDir`: `dist/react-wrappers`
 
+If a value sounds unfamiliar, jump to the [options table](#options) or the [annotated example config](#annotated-example-config) for a deeper explanation.
+
 ### Config file locations
 
 `crie` uses [`cosmiconfig`](https://github.com/cosmiconfig/cosmiconfig) under the hood. It searches upward from the provided `--config` directory (default `.`) for:
@@ -126,6 +130,50 @@ Configuration is fully optional. Without any file `crie` assumes:
 | `react.addReactHtmlAttributes` | `boolean` | `true` | When `true`, each intrinsic element merges with `React.HTMLAttributes<HTMLElement>` so common props like `className` and `style` are available. Set to `false` if you want strictly custom inputs/outputs. |
 | `react.emitWrappers` | `boolean` | `false` | Reserved for future wrapper generation. Currently unused by the CLI but accepted to avoid breaking config when the feature lands. |
 | `react.wrapperDir` | `string` | `"dist/react-wrappers"` | Destination for future wrapper files. |
+
+### Annotated example config
+
+The snippet below demonstrates every commonly used option inside `crie.config.ts`. Feel free to convert it to JSON/JS depending on your tooling — `cosmiconfig` accepts them all.
+
+```ts
+import { defineConfig } from "crie/config"; // If you prefer, export a plain object instead.
+
+export default defineConfig({
+  // All paths below are resolved from this directory.
+  root: __dirname,
+
+  // Point at the TypeScript program that contains your Angular Elements.
+  tsconfig: "tsconfig.lib.json",
+
+  // Only scan the Angular library that actually exposes custom elements.
+  include: ["projects/storefront/src/**/*.ts"],
+
+  // Skip spec files, Storybook stories, or any generated output directories.
+  exclude: ["**/*.spec.ts", "**/*.stories.tsx", "dist/**"],
+
+  // Only emit React typings for selectors that start with "my-app-".
+  tagPrefix: "my-app-",
+
+  // Control where the generated declaration file ends up.
+  outDir: "dist/elements",
+  outFile: "global.d.ts",
+
+  // Shape how props and events surface inside React.
+  widenPrimitivesToString: false,
+  react: {
+    addReactHtmlAttributes: true,
+    emitWrappers: false,
+    wrapperDir: "dist/react-wrappers"
+  }
+});
+```
+
+Key takeaways:
+
+- `root` gives you monorepo flexibility — point the config at the package folder even if the CLI runs from the repo root.
+- `include`/`exclude` are powerful filters. Because `crie` uses [fast-glob](https://github.com/mrmlnc/fast-glob) under the hood, patterns like `projects/**/src/**/*.ts` are supported.
+- React-specific options are grouped under `react` to keep the surface area small and future-proof. Set `addReactHtmlAttributes` to `false` if you want to avoid mixing `className`, `style`, etc. into your custom elements.
+- `widenPrimitivesToString` comes in handy when your consumers mostly use HTML (where attributes are string-valued) instead of JSX.
 
 ### Example configurations
 
